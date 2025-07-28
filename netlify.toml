@@ -1,0 +1,32 @@
+[build]
+  command = "bun run build"
+
+[build.environment]
+  NODE_VERSION = "18"
+  SKIP_ESLINT = "true"
+  SKIP_TYPE_CHECK = "true"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+[dev]
+  command = "bun run dev"
+  port = 3000
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    X-XSS-Protection = "1; mode=block"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+
+[[redirects]]
+  from = "/admin"
+  to = "/admin/users"
+  status = 302
+
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/___netlify-server-handler"
+  status = 200

@@ -1,0 +1,58 @@
+[
+  {
+    "id": "1",
+    "userEmail": "john.doe@example.com",
+    "userName": "Іван Петренко",
+    "currentRole": "athlete",
+    "requestedRole": "club_owner",
+    "reason": "Хочу відкрити власний клуб спортивної аеробіки в Києві. Маю досвід тренування та бажання розвивати цей спорт серед молоді.",
+    "status": "pending",
+    "requestDate": "2025-01-07T10:30:00.000Z"
+  },
+  {
+    "id": "2",
+    "userEmail": "coach.maria@example.com",
+    "userName": "Марія Коваленко",
+    "currentRole": "athlete",
+    "requestedRole": "coach_judge",
+    "reason": "Маю досвід тренерської роботи 5 років та хочу стати сертифікованим суддею для проведення змагань.",
+    "status": "approved",
+    "requestDate": "2025-01-05T14:20:00.000Z",
+    "reviewedBy": "andfedos@gmail.com",
+    "reviewDate": "2025-01-06T09:15:00.000Z",
+    "reviewComment": "Схвалено. Досвід підтверджено документами."
+  },
+  {
+    "id": "3",
+    "userEmail": "trainer.alex@example.com",
+    "userName": "Олександр Шевченко",
+    "currentRole": "athlete",
+    "requestedRole": "coach_judge",
+    "reason": "Закінчив спортивний університет, маю кваліфікацію тренера з гімнастики. Хочу розширити свої можливості в аеробіці.",
+    "status": "rejected",
+    "requestDate": "2025-01-04T16:45:00.000Z",
+    "reviewedBy": "andfedos@gmail.com",
+    "reviewDate": "2025-01-05T11:30:00.000Z",
+    "reviewComment": "Потрібні додаткові документи про кваліфікацію в аеробіці."
+  },
+  {
+    "id": "1751971234567",
+    "userEmail": "aerobicsua@gmail.com",
+    "userName": "Andrii Fedosenko",
+    "currentRole": "athlete",
+    "requestedRole": "club_owner",
+    "reason": "Хочу створити власний клуб спортивної аеробіки для розвитку цього виду спорту в Україні. Маю досвід організації спортивних заходів та роботи з молоддю.",
+    "status": "pending",
+    "requestDate": "2025-07-08T10:45:00.000Z"
+  },
+  {
+    "id": "test-1751979672284",
+    "userEmail": "demo.user@test.com",
+    "userName": "Демо Користувач (TEST)",
+    "currentRole": "athlete",
+    "requestedRole": "club_owner",
+    "reason": "Тестовий запит створений для демонстрації функціональності системи ролей ФУСАФ. Хочу відкрити демонстраційний клуб.",
+    "status": "pending",
+    "requestDate": "2025-07-08T13:01:12.284Z"
+  }
+]

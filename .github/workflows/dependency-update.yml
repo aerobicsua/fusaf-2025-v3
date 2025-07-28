@@ -1,0 +1,405 @@
+name: 📦 Dependency Updates
+
+on:
+  schedule:
+    # Run dependency updates weekly on Sundays at 02:00 UTC
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+    inputs:
+      update_type:
+        description: 'Type of update'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+        - patch
+        - minor
+        - major
+        - security
+
+jobs:
+  # 🔍 Check for Updates
+  check-updates:
+    name: 🔍 Check for Dependency Updates
+    runs-on: ubuntu-latest
+    outputs:
+      has-updates: ${{ steps.check.outputs.has-updates }}
+      security-updates: ${{ steps.check.outputs.security-updates }}
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🛠️ Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: 📦 Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: 🔍 Check for outdated packages
+        id: check
+        run: |
+          # Check for outdated packages
+          OUTDATED=$(bun outdated --json 2>/dev/null || echo '{}')
+          echo "Outdated packages: $OUTDATED"
+
+          # Check if there are any updates
+          HAS_UPDATES=$(echo "$OUTDATED" | jq -r 'length > 0')
+          echo "has-updates=$HAS_UPDATES" >> $GITHUB_OUTPUT
+
+          # Check for security updates
+          SECURITY_AUDIT=$(bun audit --json 2>/dev/null || echo '{"vulnerabilities": []}')
+          SECURITY_COUNT=$(echo "$SECURITY_AUDIT" | jq '.vulnerabilities | length')
+          echo "security-updates=$SECURITY_COUNT" >> $GITHUB_OUTPUT
+
+          echo "Security vulnerabilities found: $SECURITY_COUNT"
+
+      - name: 📊 Create update summary
+        if: steps.check.outputs.has-updates == 'true'
+        run: |
+          echo "## 📦 Dependency Update Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔍 Outdated Packages" >> $GITHUB_STEP_SUMMARY
+          bun outdated >> $GITHUB_STEP_SUMMARY || true
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔒 Security Audit" >> $GITHUB_STEP_SUMMARY
+          bun audit >> $GITHUB_STEP_SUMMARY || true
+
+  # 🔒 Security Updates
+  security-updates:
+    name: 🔒 Apply Security Updates
+    runs-on: ubuntu-latest
+    needs: check-updates
+    if: needs.check-updates.outputs.security-updates > 0
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🛠️ Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: 📦 Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: 🔒 Apply security updates
+        run: |
+          # Update packages with security vulnerabilities
+          bun update --security-only || bun update
+
+          # Run audit again to verify fixes
+          bun audit
+
+      - name: 🧪 Run tests after security updates
+        run: |
+          bun run test
+        env:
+          DATABASE_URL: mysql://test:test@localhost:3306/test_db
+          NEXTAUTH_SECRET: test-secret-security-updates
+          JWT_SECRET: test-jwt-secret-security-updates
+
+      - name: 📋 Create Pull Request
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: 🔒 Security updates for dependencies
+          title: '🔒 Security Updates - Automated Dependency Fixes'
+          body: |
+            ## 🔒 Automated Security Updates
+
+            This PR contains security updates for dependencies with known vulnerabilities.
+
+            ### 🔧 Changes Made
+            - Updated packages with security vulnerabilities
+            - Verified all tests still pass
+            - No breaking changes expected
+
+            ### 🧪 Testing
+            - [x] Unit tests passed
+            - [x] Security audit clean
+
+            ### 📋 Review Checklist
+            - [ ] Review updated packages
+            - [ ] Verify application functionality
+            - [ ] Check for any breaking changes
+
+            **⚠️ This is an automated security update. Please review and merge promptly.**
+          branch: security-updates/automated
+          labels: |
+            security
+            dependencies
+            automated
+          reviewers: |
+            admin-team
+          assignees: |
+            ${{ github.actor }}
+
+  # 📦 Regular Updates
+  regular-updates:
+    name: 📦 Apply Regular Updates
+    runs-on: ubuntu-latest
+    needs: check-updates
+    if: needs.check-updates.outputs.has-updates == 'true' && github.event.inputs.update_type != 'security'
+
+    strategy:
+      matrix:
+        update-type:
+          - patch
+          - minor
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🛠️ Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: 📦 Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: 📦 Update ${{ matrix.update-type }} versions
+        run: |
+          case "${{ matrix.update-type }}" in
+            "patch")
+              echo "Updating patch versions..."
+              bun update --patch
+              ;;
+            "minor")
+              echo "Updating minor versions..."
+              bun update --minor
+              ;;
+            "major")
+              echo "Updating major versions..."
+              bun update --major
+              ;;
+          esac
+
+      - name: 🧪 Run comprehensive tests
+        run: |
+          # Build the application
+          bun run build
+
+          # Run tests
+          bun run test
+
+          # Type check
+          bun run type-check
+
+          # Lint check
+          bun run lint
+        env:
+          DATABASE_URL: mysql://test:test@localhost:3306/test_db
+          NEXTAUTH_SECRET: test-secret-regular-updates
+          JWT_SECRET: test-jwt-secret-regular-updates
+
+      - name: 📋 Generate update summary
+        id: summary
+        run: |
+          # Get list of updated packages
+          UPDATED_PACKAGES=$(git diff package.json | grep "+" | grep -v "+++" | sed 's/+//' || echo "No changes")
+
+          echo "UPDATED_PACKAGES<<EOF" >> $GITHUB_OUTPUT
+          echo "$UPDATED_PACKAGES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: 📋 Create Pull Request
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: 📦 ${{ matrix.update-type }} dependency updates
+          title: '📦 ${{ matrix.update-type }} Updates - Automated Dependency Updates'
+          body: |
+            ## 📦 Automated ${{ matrix.update-type }} Dependency Updates
+
+            This PR contains ${{ matrix.update-type }} version updates for dependencies.
+
+            ### 🔧 Updated Packages
+            ```
+            ${{ steps.summary.outputs.UPDATED_PACKAGES }}
+            ```
+
+            ### 🧪 Testing Status
+            - [x] Build successful
+            - [x] Unit tests passed
+            - [x] Type checking passed
+            - [x] Linting passed
+
+            ### 📋 Review Checklist
+            - [ ] Review updated packages
+            - [ ] Check for breaking changes
+            - [ ] Verify application functionality
+            - [ ] Review changelog/release notes
+
+            ### 🎯 Update Type
+            **${{ matrix.update-type }}** - Expected to be ${
+              matrix.update-type === 'patch' ? 'bug fixes and patches' :
+              matrix.update-type === 'minor' ? 'new features (backward compatible)' :
+              'major changes (potentially breaking)'
+            }
+
+            **🤖 This is an automated dependency update.**
+          branch: updates/${{ matrix.update-type }}-automated
+          labels: |
+            dependencies
+            ${{ matrix.update-type }}
+            automated
+          reviewers: |
+            dev-team
+          assignees: |
+            ${{ github.actor }}
+
+  # 🔄 Merge Updates
+  merge-updates:
+    name: 🔄 Auto-merge Safe Updates
+    runs-on: ubuntu-latest
+    needs: [security-updates, regular-updates]
+    if: always() && (needs.security-updates.result == 'success' || needs.regular-updates.result == 'success')
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔄 Auto-merge security updates
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // Get all open PRs with security label
+            const { data: pulls } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open'
+            });
+
+            const securityPRs = pulls.filter(pr =>
+              pr.labels.some(label => label.name === 'security') &&
+              pr.labels.some(label => label.name === 'automated')
+            );
+
+            for (const pr of securityPRs) {
+              console.log(`Checking PR #${pr.number}: ${pr.title}`);
+
+              // Check if PR has passed all checks
+              const { data: checks } = await github.rest.checks.listForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: pr.head.sha
+              });
+
+              const allPassed = checks.check_runs.every(check =>
+                check.status === 'completed' && check.conclusion === 'success'
+              );
+
+              if (allPassed) {
+                console.log(`Auto-merging security PR #${pr.number}`);
+
+                await github.rest.pulls.merge({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: pr.number,
+                  merge_method: 'squash',
+                  commit_title: `🔒 Auto-merge: ${pr.title}`,
+                  commit_message: 'Automated security update - all checks passed'
+                });
+
+                // Add comment
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  body: '🤖 **Auto-merged:** This security update has been automatically merged after all checks passed successfully.'
+                });
+              } else {
+                console.log(`PR #${pr.number} has failing checks, skipping auto-merge`);
+              }
+            }
+
+  # 📊 Update Report
+  update-report:
+    name: 📊 Dependency Update Report
+    runs-on: ubuntu-latest
+    needs: [check-updates, security-updates, regular-updates]
+    if: always()
+
+    steps:
+      - name: 📊 Generate report
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const hasUpdates = '${{ needs.check-updates.outputs.has-updates }}';
+            const securityUpdates = '${{ needs.check-updates.outputs.security-updates }}';
+            const securityResult = '${{ needs.security-updates.result }}';
+            const regularResult = '${{ needs.regular-updates.result }}';
+
+            const report = `
+            ## 📦 Weekly Dependency Update Report
+
+            **Date:** ${new Date().toISOString().split('T')[0]}
+            **Trigger:** ${context.eventName === 'schedule' ? 'Scheduled' : 'Manual'}
+
+            ### 📊 Summary
+            - **Updates Available:** ${hasUpdates === 'true' ? '✅ Yes' : '❌ No'}
+            - **Security Issues:** ${securityUpdates > 0 ? `⚠️ ${securityUpdates} found` : '✅ None'}
+            - **Security Updates:** ${securityResult || 'N/A'}
+            - **Regular Updates:** ${regularResult || 'N/A'}
+
+            ### 🎯 Actions Taken
+            ${securityUpdates > 0 ? '- 🔒 Security update PR created' : '- ✅ No security updates needed'}
+            ${hasUpdates === 'true' ? '- 📦 Regular update PRs created' : '- ✅ All dependencies up to date'}
+
+            ### 📋 Next Steps
+            ${securityUpdates > 0 ? '- [ ] Review and merge security updates promptly' : ''}
+            ${hasUpdates === 'true' ? '- [ ] Review regular update PRs' : ''}
+            - [ ] Monitor for any issues after updates
+
+            ---
+            *This report was generated automatically by the dependency update workflow.*
+            `;
+
+            console.log(report);
+
+            // Create issue for manual review if there are security updates
+            if (securityUpdates > 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `🔒 Security Updates Required - ${new Date().toISOString().split('T')[0]}`,
+                body: report,
+                labels: ['security', 'dependencies', 'priority-high']
+              });
+            }
+
+      - name: 📤 Notify team
+        uses: 8398a7/action-slack@v3
+        if: needs.check-updates.outputs.security-updates > 0
+        with:
+          status: custom
+          channel: '#security'
+          custom_payload: |
+            {
+              text: "🔒 Security dependency updates available",
+              attachments: [{
+                color: "warning",
+                fields: [{
+                  title: "Security Vulnerabilities",
+                  value: "${{ needs.check-updates.outputs.security-updates }} packages need updates",
+                  short: true
+                }, {
+                  title: "Action Required",
+                  value: "Review and merge security update PRs",
+                  short: true
+                }]
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

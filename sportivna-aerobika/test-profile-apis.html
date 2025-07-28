@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Тест API профілю ФУСАФ</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .api-section {
+            border: 1px solid #ddd;
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 8px;
+        }
+        .api-title {
+            color: #2563eb;
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .result {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+        .success { background: #d4edda; }
+        .error { background: #f8d7da; }
+        button {
+            background: #2563eb;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover { background: #1d4ed8; }
+        input, textarea {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧪 Тест API профілю ФУСАФ</h1>
+    <p>Тестування нових API endpoints для роботи з профілем користувача</p>
+
+    <!-- Тест API списку клубів -->
+    <div class="api-section">
+        <div class="api-title">📋 GET /api/clubs/list</div>
+        <p>Завантаження списку всіх активних клубів</p>
+        <button onclick="testClubsList()">Завантажити список клубів</button>
+        <div id="clubsResult" class="result"></div>
+    </div>
+
+    <!-- Тест API списку тренерів -->
+    <div class="api-section">
+        <div class="api-title">👨‍🏫 GET /api/coaches/list</div>
+        <p>Завантаження списку всіх тренерів</p>
+        <button onclick="testCoachesList()">Завантажити список тренерів</button>
+        <div id="coachesResult" class="result"></div>
+    </div>
+
+    <!-- Тест API інформації користувача -->
+    <div class="api-section">
+        <div class="api-title">👤 GET /api/user-info</div>
+        <p>Завантаження інформації про користувача</p>
+        <input type="email" id="userEmail" placeholder="Введіть email користувача" value="andfedos@gmail.com">
+        <button onclick="testUserInfo()">Завантажити дані користувача</button>
+        <div id="userInfoResult" class="result"></div>
+    </div>
+
+    <!-- Тест API збереження профілю -->
+    <div class="api-section">
+        <div class="api-title">💾 POST /api/save-profile</div>
+        <p>Тестування збереження профілю</p>
+        <input type="email" id="profileEmail" placeholder="Email користувача" value="andfedos@gmail.com">
+        <input type="text" id="profileFirstName" placeholder="Ім'я" value="Андрій">
+        <input type="text" id="profileLastName" placeholder="Прізвище" value="Федосов">
+        <textarea id="profileBio" placeholder="Біографія" rows="3">Тестова біографія для перевірки збереження профілю.</textarea>
+        <button onclick="testSaveProfile()">Зберегти профіль</button>
+        <div id="saveProfileResult" class="result"></div>
+    </div>
+
+    <!-- Тест автентифікації -->
+    <div class="api-section">
+        <div class="api-title">🔐 POST /api/auth/login</div>
+        <p>Тестування входу в систему</p>
+        <input type="email" id="loginEmail" placeholder="Email" value="andfedos@gmail.com">
+        <input type="password" id="loginPassword" placeholder="Пароль" value="password123">
+        <button onclick="testLogin()">Увійти в систему</button>
+        <div id="loginResult" class="result"></div>
+    </div>
+
+    <!-- Debug схема бази даних -->
+    <div class="api-section">
+        <div class="api-title">🔍 GET /api/debug/user-schema</div>
+        <p>Перевірка структури таблиці users та даних користувача</p>
+        <button onclick="testUserSchema()">Перевірити схему БД</button>
+        <div id="schemaResult" class="result"></div>
+    </div>
+
+    <script>
+        async function testClubsList() {
+            const resultDiv = document.getElementById('clubsResult');
+            resultDiv.textContent = 'Завантаження...';
+            resultDiv.className = 'result';
+
+            try {
+                const response = await fetch('/api/clubs/list');
+                const data = await response.json();
+
+                resultDiv.textContent = JSON.stringify(data, null, 2);
+                resultDiv.className = 'result ' + (data.success ? 'success' : 'error');
+            } catch (error) {
+                resultDiv.textContent = 'Помилка: ' + error.message;
+                resultDiv.className = 'result error';
+            }
+        }
+
+        async function testCoachesList() {
+            const resultDiv = document.getElementById('coachesResult');
+            resultDiv.textContent = 'Завантаження...';
+            resultDiv.className = 'result';
+
+            try {
+                const response = await fetch('/api/coaches/list');
+                const data = await response.json();
+
+                resultDiv.textContent = JSON.stringify(data, null, 2);
+                resultDiv.className = 'result ' + (data.success ? 'success' : 'error');
+            } catch (error) {
+                resultDiv.textContent = 'Помилка: ' + error.message;
+                resultDiv.className = 'result error';
+            }
+        }
+
+        async function testUserInfo() {
+            const email = document.getElementById('userEmail').value;
+            const resultDiv = document.getElementById('userInfoResult');
+            resultDiv.textContent = 'Завантаження...';
+            resultDiv.className = 'result';
+
+            try {
+                const response = await fetch(`/api/user-info?email=${encodeURIComponent(email)}`);
+                const data = await response.json();
+
+                resultDiv.textContent = JSON.stringify(data, null, 2);
+                resultDiv.className = 'result ' + (data.success ? 'success' : 'error');
+            } catch (error) {
+                resultDiv.textContent = 'Помилка: ' + error.message;
+                resultDiv.className = 'result error';
+            }
+        }
+
+        async function testSaveProfile() {
+            const email = document.getElementById('profileEmail').value;
+            const firstName = document.getElementById('profileFirstName').value;
+            const lastName = document.getElementById('profileLastName').value;
+            const bio = document.getElementById('profileBio').value;
+            const resultDiv = document.getElementById('saveProfileResult');
+
+            resultDiv.textContent = 'Збереження...';
+            resultDiv.className = 'result';
+
+            const profileData = {
+                firstName,
+                lastName,
+                middleName: '',
+                bio,
+                phone: '+380123456789',
+                city: 'Київ',
+                country: 'Україна'
+            };
+
+            try {
+                const response = await fetch('/api/save-profile', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        email,
+                        profileData
+                    })
+                });
+
+                const data = await response.json();
+
+                resultDiv.textContent = JSON.stringify(data, null, 2);
+                resultDiv.className = 'result ' + (data.success ? 'success' : 'error');
+            } catch (error) {
+                resultDiv.textContent = 'Помилка: ' + error.message;
+                resultDiv.className = 'result error';
+            }
+        }
+
+        async function testLogin() {
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+            const resultDiv = document.getElementById('loginResult');
+
+            resultDiv.textContent = 'Авторизація...';
+            resultDiv.className = 'result';
+
+            try {
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        email,
+                        password
+                    })
+                });
+
+                const data = await response.json();
+
+                // Не показуємо чутливу інформацію
+                if (data.user && data.user.profile) {
+                    data.user.profile = '[Профіль приховано]';
+                }
+
+                resultDiv.textContent = JSON.stringify(data, null, 2);
+                resultDiv.className = 'result ' + (data.success ? 'success' : 'error');
+            } catch (error) {
+                resultDiv.textContent = 'Помилка: ' + error.message;
+                resultDiv.className = 'result error';
+            }
+        }
+
+        async function testUserSchema() {
+            const resultDiv = document.getElementById('schemaResult');
+            resultDiv.textContent = 'Завантаження схеми...';
+            resultDiv.className = 'result';
+
+            try {
+                const response = await fetch('/api/debug/user-schema');
+                const data = await response.json();
+
+                resultDiv.textContent = JSON.stringify(data, null, 2);
+                resultDiv.className = 'result ' + (data.success ? 'success' : 'error');
+            } catch (error) {
+                resultDiv.textContent = 'Помилка: ' + error.message;
+                resultDiv.className = 'result error';
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,101 @@
+[
+  {
+    "id": "request-1753197144855",
+    "user": {
+      "id": "user-1753197144855",
+      "name": "Федосенко Андрій Вікторович",
+      "email": "andfedos@gmail.com",
+      "phone": "+380504109083",
+      "registeredAt": "2025-07-22T15:12:24.855Z"
+    },
+    "club": {
+      "name": "Фітнес-клуб \"ТехноФіт\"",
+      "type": "club",
+      "address": "Симоненка 3в",
+      "city": "Вишгород",
+      "region": "Київська область",
+      "zipCode": "07301",
+      "description": "",
+      "experience": "",
+      "legalStatus": "ПП",
+      "website": ""
+    },
+    "status": "approved",
+    "submittedAt": "2025-07-22T15:12:24.855Z",
+    "documents": [
+      {
+        "name": "Інформація з реєстрів - Електронний кабінет платника Єдиний податок.pdf",
+        "url": "/api/files/docs-1753197144855-6xav23a9y"
+      }
+    ],
+    "reviewNotes": "Все ок",
+    "reviewedBy": "Адміністратор",
+    "reviewedAt": "2025-07-22T15:13:22.759Z"
+  },
+  {
+    "id": "request-1753197708859",
+    "user": {
+      "id": "user-1753197708859",
+      "name": "Федосенко Андрій Вікторович",
+      "email": "afedos@ukr.net",
+      "phone": "+380504109083",
+      "registeredAt": "2025-07-22T15:21:48.859Z"
+    },
+    "club": {
+      "name": "Фітнес-клуб \"ТехноФіт\"",
+      "type": "club",
+      "address": "Симоненка 3в",
+      "city": "Вишгород",
+      "region": "Київська область",
+      "zipCode": "07301",
+      "description": "",
+      "experience": "",
+      "legalStatus": "ПП",
+      "website": ""
+    },
+    "status": "approved",
+    "submittedAt": "2025-07-22T15:21:48.859Z",
+    "documents": [
+      {
+        "name": "Підписаний_Довiдка про вiдкриття рахунку (2).pdf",
+        "url": "/api/files/docs-1753197708859-ig45g5lap"
+      }
+    ],
+    "reviewNotes": "jr",
+    "reviewedBy": "Адміністратор",
+    "reviewedAt": "2025-07-22T15:22:39.033Z"
+  },
+  {
+    "id": "request-1753198083062",
+    "user": {
+      "id": "user-1753198083062",
+      "name": "Федосенко Андрій Вікторович",
+      "email": "afedos@ukr.net",
+      "phone": "+380504109083",
+      "registeredAt": "2025-07-22T15:28:03.062Z"
+    },
+    "club": {
+      "name": "Фітнес-клуб \"ТехноФіт\"",
+      "type": "club",
+      "address": "Симоненка 3в",
+      "city": "Вишгород",
+      "region": "Київська область",
+      "zipCode": "07301",
+      "description": "",
+      "experience": "",
+      "legalStatus": "ПП",
+      "website": ""
+    },
+    "status": "approved",
+    "submittedAt": "2025-07-22T15:28:03.062Z",
+    "documents": [
+      {
+        "name": "Інформація з реєстрів - Електронний кабінет платника.pdf",
+        "url": "/api/files/docs-1753198083061-bcstbrfqr"
+      }
+    ],
+    "reviewNotes": "jr",
+    "reviewedBy": "Адміністратор",
+    "reviewedAt": "2025-07-22T15:28:55.884Z"
+  }
+]

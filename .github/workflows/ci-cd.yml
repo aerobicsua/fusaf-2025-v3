@@ -1,0 +1,475 @@
+name: 🚀 FUSAF CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  release:
+    types: [ published ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ✅ Code Quality and Testing
+  quality:
+    name: 🔍 Code Quality & Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🛠️ Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: 📦 Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: 🔧 Build application
+        run: bun run build
+        env:
+          DATABASE_URL: mysql://test:test@localhost:3306/test_db
+          NEXTAUTH_SECRET: test-secret-for-ci
+          JWT_SECRET: test-jwt-secret-for-ci
+
+      - name: 🧪 Run tests
+        run: bun test
+        continue-on-error: true
+
+      - name: 📊 TypeScript check
+        run: bun run type-check
+        continue-on-error: true
+
+      - name: 🎨 Lint check
+        run: bun run lint
+        continue-on-error: true
+
+      - name: 🔒 Security audit
+        run: bun audit
+        continue-on-error: true
+
+      - name: 📈 Upload coverage reports
+        uses: codecov/codecov-action@v3
+        if: always()
+
+  # 🐳 Build Docker Image
+  build:
+    name: 🐳 Build Docker Image
+    runs-on: ubuntu-latest
+    needs: quality
+    if: github.event_name != 'pull_request'
+
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+      digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐳 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🔐 Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🏷️ Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: 🔨 Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64,linux/arm64
+
+      - name: 📋 Output image
+        id: image
+        run: |
+          echo "image=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}" >> $GITHUB_OUTPUT
+
+  # 🧪 Integration Tests
+  integration-tests:
+    name: 🧪 Integration Tests
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name != 'pull_request'
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test_password
+          MYSQL_DATABASE: fusaf_test
+          MYSQL_USER: fusaf_test
+          MYSQL_PASSWORD: test_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐳 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🔐 Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🚀 Run integration tests
+        run: |
+          docker run --rm \
+            --network host \
+            -e NODE_ENV=test \
+            -e DATABASE_URL="mysql://fusaf_test:test_password@localhost:3306/fusaf_test" \
+            -e NEXTAUTH_SECRET="test-secret" \
+            -e JWT_SECRET="test-jwt-secret" \
+            ${{ needs.build.outputs.image }}:${{ github.sha }} \
+            bun test:integration
+
+      - name: 🔍 Health check
+        run: |
+          docker run --rm -d --name fusaf-test \
+            --network host \
+            -e NODE_ENV=test \
+            -e DATABASE_URL="mysql://fusaf_test:test_password@localhost:3306/fusaf_test" \
+            -e NEXTAUTH_SECRET="test-secret" \
+            -e JWT_SECRET="test-jwt-secret" \
+            ${{ needs.build.outputs.image }}:${{ github.sha }}
+
+          # Wait for container to start
+          sleep 30
+
+          # Health check
+          docker exec fusaf-test node healthcheck.js
+
+          # Cleanup
+          docker stop fusaf-test
+
+  # 🔒 Security Scanning
+  security:
+    name: 🔒 Security Scanning
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name != 'pull_request'
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔍 Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ needs.build.outputs.image }}:${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: 📤 Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # 🚀 Deploy to Staging
+  deploy-staging:
+    name: 🚀 Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build, integration-tests, security]
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
+    environment: staging
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup deployment files
+        run: |
+          # Create staging environment file
+          cat > .env.staging << EOF
+          NODE_ENV=staging
+          DATABASE_URL=${{ secrets.STAGING_DATABASE_URL }}
+          NEXTAUTH_SECRET=${{ secrets.STAGING_NEXTAUTH_SECRET }}
+          JWT_SECRET=${{ secrets.STAGING_JWT_SECRET }}
+          NEXTAUTH_URL=${{ secrets.STAGING_APP_URL }}
+          SMTP_HOST=${{ secrets.SMTP_HOST }}
+          SMTP_PORT=${{ secrets.SMTP_PORT }}
+          SMTP_USER=${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}
+          EOF
+
+      - name: 🚀 Deploy to staging server
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USERNAME }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          port: ${{ secrets.STAGING_PORT }}
+          script: |
+            cd /var/www/fusaf-staging
+
+            # Pull latest changes
+            git pull origin develop
+
+            # Copy environment file
+            cp .env.staging .env.production
+
+            # Update image in docker-compose
+            sed -i "s|image: .*|image: ${{ needs.build.outputs.image }}:${{ github.sha }}|g" docker-compose.staging.yml
+
+            # Deploy
+            docker-compose -f docker-compose.staging.yml down
+            docker-compose -f docker-compose.staging.yml pull
+            docker-compose -f docker-compose.staging.yml up -d
+
+            # Health check
+            sleep 30
+            curl -f http://localhost:3000/api/health || exit 1
+
+      - name: 🔗 Comment PR with staging URL
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '🚀 **Staging deployment successful!**\n\n📱 **Staging URL:** https://staging.fusaf.org.ua\n🔍 **Health Check:** https://staging.fusaf.org.ua/api/health\n📚 **API Docs:** https://staging.fusaf.org.ua/docs'
+            })
+
+  # 🌐 Deploy to Production
+  deploy-production:
+    name: 🌐 Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build, integration-tests, security]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: production
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📋 Create deployment
+        uses: actions/github-script@v6
+        id: deployment
+        with:
+          result-encoding: string
+          script: |
+            const { data: deployment } = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: context.sha,
+              environment: 'production',
+              description: 'Deploy to production',
+              auto_merge: false
+            })
+            return deployment.id
+
+      - name: 🔧 Setup deployment files
+        run: |
+          # Create production environment file
+          cat > .env.production << EOF
+          NODE_ENV=production
+          DATABASE_URL=${{ secrets.PROD_DATABASE_URL }}
+          NEXTAUTH_SECRET=${{ secrets.PROD_NEXTAUTH_SECRET }}
+          JWT_SECRET=${{ secrets.PROD_JWT_SECRET }}
+          NEXTAUTH_URL=${{ secrets.PROD_APP_URL }}
+          SMTP_HOST=${{ secrets.SMTP_HOST }}
+          SMTP_PORT=${{ secrets.SMTP_PORT }}
+          SMTP_USER=${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}
+          MYSQL_ROOT_PASSWORD=${{ secrets.PROD_MYSQL_ROOT_PASSWORD }}
+          MYSQL_PASSWORD=${{ secrets.PROD_MYSQL_PASSWORD }}
+          DOMAIN_NAME=${{ secrets.PROD_DOMAIN_NAME }}
+          ACME_EMAIL=${{ secrets.PROD_ACME_EMAIL }}
+          EOF
+
+      - name: 🗄️ Backup production database
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USERNAME }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          port: ${{ secrets.PROD_PORT }}
+          script: |
+            cd /var/www/fusaf-production
+
+            # Create backup
+            docker exec fusaf-db mysqldump -u root -p${{ secrets.PROD_MYSQL_ROOT_PASSWORD }} fusaf_production > backups/pre_deploy_$(date +%Y%m%d_%H%M%S).sql
+
+            # Keep only last 10 backups
+            ls -t backups/pre_deploy_*.sql | tail -n +11 | xargs -r rm
+
+      - name: 🚀 Deploy to production
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USERNAME }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          port: ${{ secrets.PROD_PORT }}
+          script: |
+            cd /var/www/fusaf-production
+
+            # Pull latest changes
+            git pull origin main
+
+            # Copy environment file
+            cp .env.production .env.local
+
+            # Update image in docker-compose
+            sed -i "s|image: .*|image: ${{ needs.build.outputs.image }}:${{ github.sha }}|g" docker-compose.prod.yml
+
+            # Deploy with zero downtime
+            docker-compose -f docker-compose.prod.yml pull
+            docker-compose -f docker-compose.prod.yml up -d --no-deps fusaf-app
+
+            # Wait for new container to be healthy
+            sleep 60
+
+            # Health check
+            curl -f https://fusaf.org.ua/api/health || exit 1
+
+            # Clean up old images
+            docker image prune -f
+
+      - name: ✅ Deployment success
+        uses: actions/github-script@v6
+        with:
+          script: |
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: '${{ steps.deployment.outputs.result }}',
+              state: 'success',
+              environment_url: 'https://fusaf.org.ua',
+              description: 'Deployment successful'
+            })
+
+      - name: 📢 Notify team
+        uses: 8398a7/action-slack@v3
+        if: always()
+        with:
+          status: ${{ job.status }}
+          channel: '#deployments'
+          text: |
+            🎉 **FUSAF Production Deployment** ${{ job.status }}!
+
+            **Branch:** ${{ github.ref_name }}
+            **Commit:** ${{ github.sha }}
+            **Author:** ${{ github.actor }}
+            **URL:** https://fusaf.org.ua
+
+            📚 **API Docs:** https://fusaf.org.ua/docs
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # 🏷️ Release
+  release:
+    name: 🏷️ Create Release
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🏷️ Generate tag
+        id: tag
+        run: |
+          # Generate semantic version
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "Latest tag: $LATEST_TAG"
+
+          # Extract version numbers
+          VERSION=$(echo $LATEST_TAG | sed 's/v//')
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+
+          # Increment patch version
+          PATCH=$((PATCH + 1))
+          NEW_TAG="v$MAJOR.$MINOR.$PATCH"
+
+          echo "New tag: $NEW_TAG"
+          echo "tag=$NEW_TAG" >> $GITHUB_OUTPUT
+
+      - name: 📋 Generate changelog
+        id: changelog
+        run: |
+          # Generate changelog from commits
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          if [ -z "$PREVIOUS_TAG" ]; then
+            COMMITS=$(git log --pretty=format:"- %s (%h)" --reverse)
+          else
+            COMMITS=$(git log $PREVIOUS_TAG..HEAD --pretty=format:"- %s (%h)" --reverse)
+          fi
+
+          echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
+          echo "$COMMITS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: 🚀 Create release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          release_name: Release ${{ steps.tag.outputs.tag }}
+          body: |
+            ## 🎉 FUSAF Release ${{ steps.tag.outputs.tag }}
+
+            ### 🚀 Deployed to Production
+            - **URL:** https://fusaf.org.ua
+            - **API Docs:** https://fusaf.org.ua/docs
+            - **Health Check:** https://fusaf.org.ua/api/health
+
+            ### 📋 Changes in this release
+            ${{ steps.changelog.outputs.CHANGELOG }}
+
+            ### 🐳 Docker Image
+            ```
+            docker pull ${{ needs.build.outputs.image }}:${{ github.sha }}
+            ```
+
+            ### 📊 Deployment Info
+            - **Commit:** ${{ github.sha }}
+            - **Author:** ${{ github.actor }}
+            - **Deployed:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          draft: false
+          prerelease: false

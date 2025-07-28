@@ -1,0 +1,448 @@
+name: 🧪 Tests & Quality Checks
+
+on:
+  push:
+    branches: [ main, develop, feature/* ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # Run tests daily at 02:00 UTC
+    - cron: '0 2 * * *'
+
+jobs:
+  # 🧪 Unit Tests
+  unit-tests:
+    name: 🧪 Unit Tests
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [18, 20]
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🛠️ Setup Bun ${{ matrix.node-version }}
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: 📦 Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: 🧪 Run unit tests
+        run: bun test --coverage
+        env:
+          DATABASE_URL: mysql://test:test@localhost:3306/test_fusaf
+          NEXTAUTH_SECRET: test-secret-unit-tests
+          JWT_SECRET: test-jwt-secret-unit-tests
+
+      - name: 📊 Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage/coverage-final.json
+          flags: unit-tests
+          name: unit-tests-${{ matrix.node-version }}
+
+  # 🔗 Integration Tests
+  integration-tests:
+    name: 🔗 Integration Tests
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test_root_password
+          MYSQL_DATABASE: fusaf_integration_test
+          MYSQL_USER: fusaf_test_user
+          MYSQL_PASSWORD: test_user_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🛠️ Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: 📦 Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: 🗄️ Setup test database
+        run: |
+          # Wait for MySQL to be ready
+          sleep 10
+
+          # Create additional test databases
+          mysql -h 127.0.0.1 -u root -ptest_root_password -e "
+            CREATE DATABASE IF NOT EXISTS fusaf_test_api;
+            CREATE DATABASE IF NOT EXISTS fusaf_test_e2e;
+            GRANT ALL PRIVILEGES ON fusaf_test_api.* TO 'fusaf_test_user'@'%';
+            GRANT ALL PRIVILEGES ON fusaf_test_e2e.* TO 'fusaf_test_user'@'%';
+            FLUSH PRIVILEGES;
+          "
+
+      - name: 🔨 Build application
+        run: bun run build
+        env:
+          DATABASE_URL: mysql://fusaf_test_user:test_user_password@127.0.0.1:3306/fusaf_integration_test
+          NEXTAUTH_SECRET: integration-test-secret-key-32-chars
+          JWT_SECRET: integration-test-jwt-secret-key-32
+
+      - name: 🧪 Run integration tests
+        run: bun run test:integration
+        env:
+          DATABASE_URL: mysql://fusaf_test_user:test_user_password@127.0.0.1:3306/fusaf_integration_test
+          REDIS_URL: redis://127.0.0.1:6379
+          NEXTAUTH_SECRET: integration-test-secret-key-32-chars
+          JWT_SECRET: integration-test-jwt-secret-key-32
+          NODE_ENV: test
+
+      - name: 📊 Upload integration test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: integration-test-results
+          path: |
+            test-results/
+            logs/
+
+  # 🔍 API Tests
+  api-tests:
+    name: 🔍 API Tests
+    runs-on: ubuntu-latest
+    needs: integration-tests
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: api_test_root_password
+          MYSQL_DATABASE: fusaf_api_test
+          MYSQL_USER: fusaf_api_user
+          MYSQL_PASSWORD: api_test_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🛠️ Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: 📦 Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: 🚀 Start application
+        run: |
+          bun run build
+          bun start &
+          APP_PID=$!
+          echo "APP_PID=$APP_PID" >> $GITHUB_ENV
+
+          # Wait for app to start
+          sleep 30
+
+          # Health check
+          curl -f http://localhost:3000/api/health || exit 1
+        env:
+          DATABASE_URL: mysql://fusaf_api_user:api_test_password@127.0.0.1:3306/fusaf_api_test
+          NEXTAUTH_SECRET: api-test-secret-key-32-characters
+          JWT_SECRET: api-test-jwt-secret-key-32-chars
+          NODE_ENV: test
+          PORT: 3000
+
+      - name: 🧪 Run API tests
+        run: |
+          # Install newman for Postman collection testing
+          bun add -g newman
+
+          # Run API tests
+          bun run test:api
+
+          # Run Postman collection if exists
+          if [ -f "tests/postman/FUSAF_API.postman_collection.json" ]; then
+            newman run tests/postman/FUSAF_API.postman_collection.json \
+              --environment tests/postman/test.postman_environment.json \
+              --reporters cli,json \
+              --reporter-json-export api-test-results.json
+          fi
+
+      - name: 🛑 Stop application
+        if: always()
+        run: |
+          if [ ! -z "$APP_PID" ]; then
+            kill $APP_PID || true
+          fi
+
+      - name: 📊 Upload API test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: api-test-results
+          path: |
+            api-test-results.json
+            newman-results/
+
+  # 🎨 Code Quality
+  code-quality:
+    name: 🎨 Code Quality
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🛠️ Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: 📦 Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: 🔧 TypeScript check
+        run: bun run type-check
+
+      - name: 🎨 ESLint check
+        run: bun run lint
+
+      - name: 💄 Prettier check
+        run: bun run format:check
+
+      - name: 🔍 SonarCloud Scan
+        uses: SonarSource/sonarcloud-github-action@master
+        if: github.event_name != 'dependabot'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  # 🔒 Security Tests
+  security-tests:
+    name: 🔒 Security Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🛠️ Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: 📦 Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: 🔒 Run security audit
+        run: |
+          # Bun audit
+          bun audit --audit-level moderate
+
+          # Additional security checks
+          bunx audit-ci --moderate
+
+      - name: 🔍 CodeQL Analysis
+        uses: github/codeql-action/init@v2
+        with:
+          languages: javascript
+
+      - name: 🔨 Autobuild
+        uses: github/codeql-action/autobuild@v2
+
+      - name: 🔍 Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v2
+
+      - name: 🛡️ OWASP ZAP Security Scan
+        if: github.ref == 'refs/heads/main'
+        run: |
+          docker run -v $(pwd):/zap/wrk/:rw \
+            -t ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t http://localhost:3000 \
+            -J zap-report.json || true
+        continue-on-error: true
+
+      - name: 📤 Upload security scan results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: security-scan-results
+          path: |
+            zap-report.json
+            security-results/
+
+  # 📊 Performance Tests
+  performance-tests:
+    name: 📊 Performance Tests
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: perf_test_password
+          MYSQL_DATABASE: fusaf_perf_test
+          MYSQL_USER: fusaf_perf_user
+          MYSQL_PASSWORD: perf_test_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🛠️ Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: 📦 Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: 🚀 Start application
+        run: |
+          bun run build
+          bun start &
+          APP_PID=$!
+          echo "APP_PID=$APP_PID" >> $GITHUB_ENV
+
+          # Wait for app to start
+          sleep 30
+        env:
+          DATABASE_URL: mysql://fusaf_perf_user:perf_test_password@127.0.0.1:3306/fusaf_perf_test
+          NEXTAUTH_SECRET: perf-test-secret-key-32-characters
+          JWT_SECRET: perf-test-jwt-secret-key-32-chars
+          NODE_ENV: production
+          PORT: 3000
+
+      - name: 📊 Lighthouse Performance Test
+        uses: treosh/lighthouse-ci-action@v10
+        with:
+          urls: |
+            http://localhost:3000
+            http://localhost:3000/docs
+            http://localhost:3000/api/health
+          uploadArtifacts: true
+          temporaryPublicStorage: true
+
+      - name: ⚡ Load Testing with Artillery
+        run: |
+          # Install Artillery
+          bun add -g artillery
+
+          # Run load tests
+          artillery run tests/performance/load-test.yml || true
+        continue-on-error: true
+
+      - name: 🛑 Stop application
+        if: always()
+        run: |
+          if [ ! -z "$APP_PID" ]; then
+            kill $APP_PID || true
+          fi
+
+      - name: 📤 Upload performance results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: performance-test-results
+          path: |
+            lighthouse-results/
+            artillery-report.json
+
+  # 📋 Test Summary
+  test-summary:
+    name: 📋 Test Summary
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests, api-tests, code-quality, security-tests]
+    if: always()
+
+    steps:
+      - name: 📊 Download test artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: test-results/
+
+      - name: 📋 Create test summary
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+
+            // Get job results
+            const jobs = [
+              { name: 'Unit Tests', result: '${{ needs.unit-tests.result }}' },
+              { name: 'Integration Tests', result: '${{ needs.integration-tests.result }}' },
+              { name: 'API Tests', result: '${{ needs.api-tests.result }}' },
+              { name: 'Code Quality', result: '${{ needs.code-quality.result }}' },
+              { name: 'Security Tests', result: '${{ needs.security-tests.result }}' }
+            ];
+
+            const passedJobs = jobs.filter(job => job.result === 'success').length;
+            const totalJobs = jobs.length;
+            const status = passedJobs === totalJobs ? '✅ All tests passed!' : '❌ Some tests failed';
+
+            const summary = `
+            ## 🧪 Test Summary
+
+            ${status}
+
+            **Results:** ${passedJobs}/${totalJobs} jobs passed
+
+            | Test Suite | Status |
+            |------------|--------|
+            ${jobs.map(job => `| ${job.name} | ${job.result === 'success' ? '✅' : '❌'} ${job.result} |`).join('\n')}
+
+            ### 📊 Coverage & Quality
+            - Unit test coverage reports available in artifacts
+            - Integration test results available in artifacts
+            - Security scan results available in artifacts
+            `;
+
+            console.log(summary);
+
+            // Comment on PR if this is a pull request
+            if (context.payload.pull_request) {
+              await github.rest.issues.createComment({
+                issue_number: context.payload.pull_request.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: summary
+              });
+            }
