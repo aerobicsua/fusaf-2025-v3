@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { type NextRequest, NextResponse } from 'next/server';
 import { validatePreliminaryRegistration, calculateRegistrationFee } from '@/lib/competition-types';
 
 // Демонстраційні дані змагань
@@ -8,7 +8,7 @@ const demoCompetitions = {
     title: 'Кубок України зі спортивної аеробіки 2025',
     date: '2025-04-15',
     status: 'registration_open',
-    registration_deadline: '2025-04-01',
+    registration_deadline: '2026-03-15',
     registration_fee: 300,
     entry_fee: 200
   },
@@ -17,7 +17,7 @@ const demoCompetitions = {
     title: 'Чемпіонат Львівської області',
     date: '2025-03-20',
     status: 'registration_open',
-    registration_deadline: '2025-03-10',
+    registration_deadline: '2026-02-28',
     registration_fee: 250,
     entry_fee: 150
   },
@@ -35,12 +35,12 @@ const demoCompetitions = {
 // POST /api/competitions/[id]/preliminary-registration
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     console.log('📝 Demo: Preliminary registration request received');
 
-    const competitionId = params.id;
+    const { id: competitionId } = await params;
     const registrationData = await request.json();
 
     console.log('Registration data:', {
@@ -149,10 +149,10 @@ export async function POST(
 // GET /api/competitions/[id]/preliminary-registration
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const competitionId = params.id;
+    const { id: competitionId } = await params;
 
     // Демонстраційні дані реєстрацій
     const demoRegistrations = [

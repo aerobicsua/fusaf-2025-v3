@@ -1,208 +1,143 @@
-import Database from 'better-sqlite3';
+import mysql from 'mysql2/promise';
 
-// Simple SQLite database for development
-let db: Database.Database | null = null;
-
-function getDatabase() {
-  if (!db) {
-    db = new Database('./fusaf_dev.db');
-
-    // Create tables if they don't exist
-    initializeTables();
+// Конфігурація підключення до MySQL
+const dbConfig = {
+  host: process.env.DB_HOST,
+  port: parseInt(process.env.DB_PORT || '3306'),
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+  charset: 'utf8mb4',
+  timezone: '+00:00',
+  connectTimeout: 10000,
+  // SSL налаштування для безпечного з'єднання
+  ssl: {
+    rejectUnauthorized: false
   }
-  return db;
+};
+
+// Pool з'єднань для оптимізації
+let pool: mysql.Pool | null = null;
+
+// Створення pool з'єднань
+export function createPool() {
+  if (!pool) {
+    pool = mysql.createPool({
+      ...dbConfig,
+      connectionLimit: 10,
+      queueLimit: 0
+    });
+  }
+  return pool;
 }
 
-function initializeTables() {
-  if (!db) return;
-
-  // Users table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      email TEXT UNIQUE NOT NULL,
-      password TEXT,
-      roles TEXT DEFAULT '["user"]',
-      status TEXT DEFAULT 'active',
-      firstName TEXT,
-      lastName TEXT,
-      phone TEXT,
-      emailVerified INTEGER DEFAULT 0,
-      createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  // Competitions table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS competitions (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL,
-      description TEXT,
-      start_date DATETIME,
-      end_date DATETIME,
-      registration_deadline DATETIME,
-      location TEXT,
-      categories TEXT,
-      registration_fee REAL DEFAULT 0,
-      max_participants INTEGER,
-      current_participants INTEGER DEFAULT 0,
-      status TEXT DEFAULT 'draft',
-      organizer TEXT,
-      rules TEXT,
-      prizes TEXT,
-      createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  // Payments table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS payments (
-      id TEXT PRIMARY KEY,
-      order_id TEXT UNIQUE NOT NULL,
-      competition_id TEXT,
-      amount REAL NOT NULL,
-      currency TEXT DEFAULT 'UAH',
-      description TEXT NOT NULL,
-      status TEXT DEFAULT 'pending',
-      payment_method TEXT DEFAULT 'liqpay',
-      customer_email TEXT,
-      customer_phone TEXT,
-      customer_user_id TEXT,
-      liqpay_payment_id TEXT,
-      liqpay_transaction_id TEXT,
-      liqpay_data TEXT,
-      liqpay_signature TEXT,
-      liqpay_status TEXT,
-      liqpay_err_code TEXT,
-      liqpay_err_description TEXT,
-      registration_data TEXT,
-      callback_data TEXT,
-      sender_card_mask TEXT,
-      sender_card_bank TEXT,
-      sender_phone TEXT,
-      expires_at DATETIME,
-      paid_at DATETIME,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (competition_id) REFERENCES competitions(id)
-    )
-  `);
-
-  // Athlete registrations table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS athlete_registrations (
-      id TEXT PRIMARY KEY,
-      competition_id TEXT,
-      athlete_email TEXT,
-      firstName TEXT,
-      lastName TEXT,
-      middleName TEXT,
-      phone TEXT,
-      dateOfBirth TEXT,
-      gender TEXT,
-      category TEXT,
-      club TEXT,
-      city TEXT,
-      region TEXT,
-      notes TEXT,
-      payment_id TEXT,
-      registration_status TEXT DEFAULT 'pending',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (competition_id) REFERENCES competitions(id),
-      FOREIGN KEY (payment_id) REFERENCES payments(id)
-    )
-  `);
-
-  // Admin logs table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS admin_logs (
-      id TEXT PRIMARY KEY,
-      admin_id TEXT,
-      admin_email TEXT,
-      action TEXT,
-      target_type TEXT,
-      target_id TEXT,
-      details TEXT,
-      ip_address TEXT,
-      user_agent TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  console.log('✅ Database tables initialized');
-}
-
-export async function executeQuery<T = any>(
-  query: string,
-  params: any[] = []
-): Promise<T[]> {
-  const database = getDatabase();
-
+// Отримання з'єднання з базою даних
+export async function getConnection() {
   try {
-    if (query.trim().toUpperCase().startsWith('SELECT')) {
-      const stmt = database.prepare(query);
-      return stmt.all(...params) as T[];
-    } else {
-      const stmt = database.prepare(query);
-      const result = stmt.run(...params);
-      return [result] as any;
-    }
+    const pool = createPool();
+    const connection = await pool.getConnection();
+    return connection;
   } catch (error) {
-    console.error('Database query error:', error);
-    console.error('Query:', query);
-    console.error('Params:', params);
+    console.error('❌ Помилка підключення до MySQL:', error);
     throw error;
   }
 }
 
-// Insert demo data for testing
-export async function insertDemoData() {
+// Виконання SQL запиту
+export async function executeQuery<T = any>(
+  query: string,
+  params: any[] = []
+): Promise<T[]> {
+  let connection;
+
   try {
-    // Insert demo admin user
-    await executeQuery(`
-      INSERT OR IGNORE INTO users (id, email, password, roles, firstName, lastName, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `, [
-      'admin-001',
-      'admin@fusaf.org.ua',
-      '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewYe/2jS9TojmQoO', // password: admin123
-      '["admin"]',
-      'Адмін',
-      'ФУСАФ',
-      'active'
-    ]);
-
-    // Insert demo competition
-    await executeQuery(`
-      INSERT OR IGNORE INTO competitions (
-        id, title, description, start_date, end_date, registration_deadline,
-        location, categories, registration_fee, max_participants, status, organizer
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      'comp-001',
-      'Чемпіонат України зі Спортивної Аеробіки 2024',
-      'Національний чемпіонат зі спортивної аеробіки серед усіх вікових категорій',
-      '2024-12-01 10:00:00',
-      '2024-12-03 18:00:00',
-      '2024-11-25 23:59:59',
-      '{"city": "Київ", "venue": "Палац Спорту", "address": "вул. Спортивна, 1"}',
-      '[{"name": "Юніори", "ageFrom": 16, "ageTo": 18}, {"name": "Дорослі", "ageFrom": 18, "ageTo": 35}]',
-      250.00,
-      100,
-      'registration_open',
-      'ФУСАФ'
-    ]);
-
-    console.log('✅ Demo data inserted');
+    connection = await getConnection();
+    const [rows] = await connection.execute(query, params);
+    return rows as T[];
   } catch (error) {
-    console.error('Error inserting demo data:', error);
+    console.error('❌ Помилка виконання запиту MySQL:', error);
+    console.error('📝 Запит:', query);
+    console.error('📊 Параметри:', params);
+    throw error;
+  } finally {
+    if (connection) {
+      connection.release();
+    }
   }
 }
 
-// Initialize demo data on first load
-setTimeout(() => {
-  insertDemoData();
-}, 1000);
+// Виконання запиту з поверненням метаданих
+export async function executeQueryWithMeta<T = any>(
+  query: string,
+  params: any[] = []
+): Promise<{ rows: T[], insertId?: number, affectedRows?: number }> {
+  let connection;
+
+  try {
+    connection = await getConnection();
+    const [rows, fields] = await connection.execute(query, params);
+
+    const result: any = rows;
+    const meta = fields as any;
+
+    return {
+      rows: result,
+      insertId: meta.insertId,
+      affectedRows: meta.affectedRows
+    };
+  } catch (error) {
+    console.error('❌ Помилка виконання запиту MySQL:', error);
+    throw error;
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+}
+
+// Тестування підключення до БД
+export async function testConnection(): Promise<boolean> {
+  try {
+    const connection = await getConnection();
+    await connection.ping();
+    connection.release();
+
+    console.log('✅ З\'єднання з MySQL успішне!');
+    console.log(`📊 База даних: ${dbConfig.database}`);
+    console.log(`🖥️ Хост: ${dbConfig.host}`);
+
+    return true;
+  } catch (error) {
+    console.error('❌ Помилка тестування підключення:', error);
+    return false;
+  }
+}
+
+// Отримання інформації про БД
+export async function getDatabaseInfo() {
+  try {
+    const tables = await executeQuery(`
+      SELECT TABLE_NAME as name, TABLE_ROWS as rows
+      FROM information_schema.TABLES
+      WHERE TABLE_SCHEMA = ?
+    `, [dbConfig.database]);
+
+    return {
+      database: dbConfig.database,
+      host: dbConfig.host,
+      tables: tables
+    };
+  } catch (error) {
+    console.error('❌ Помилка отримання інформації про БД:', error);
+    throw error;
+  }
+}
+
+// Закриття всіх з'єднань
+export async function closeConnections() {
+  if (pool) {
+    await pool.end();
+    pool = null;
+    console.log('✅ З\'єднання з MySQL закрито');
+  }
+}

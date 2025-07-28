@@ -1,34 +1,17 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import { type NextRequest, NextResponse } from 'next/server';
+import { getApiSession } from '@/lib/auth';
+// authOptions removed
+import { supabase } from '@/lib/supabase';
 import { validateIndividualRegistration, generateRegistrationNumber } from '@/lib/competition-types';
-
-// Демонстраційні дані змагань
-const demoCompetitions = {
-  'comp-1': {
-    id: 'comp-1',
-    title: 'Кубок України зі спортивної аеробіки 2025',
-    date: '2025-04-15',
-    time: '10:00',
-    location: 'Палац спорту "Україна"',
-    address: 'вул. Велика Васильківська, 55, Київ, 03150',
-    status: 'registration_open',
-    registration_deadline: '2025-04-01',
-    registration_fee: 300,
-    entry_fee: 200,
-    max_participants: 200,
-    organizer_name: 'ФУСАФ',
-    organizer_phone: '+380442345678'
-  }
-};
+import { EmailService } from '@/lib/email';
 
 // POST /api/competitions/[id]/individual-registration
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await getApiSession(request);
 
     if (!session) {
       return NextResponse.json(
@@ -37,7 +20,7 @@ export async function POST(
       );
     }
 
-    const competitionId = params.id;
+    const { id: competitionId } = await params;
     const registrationData = await request.json();
 
     // Валідація даних реєстрації
@@ -49,10 +32,14 @@ export async function POST(
       );
     }
 
-    // Перевіряємо чи існує змагання
-    const competition = demoCompetitions[competitionId as keyof typeof demoCompetitions];
+    // Перевіряємо чи існує змагання та чи відкрита реєстрація
+    const { data: competition, error: competitionError } = await supabase
+      .from('competitions')
+      .select('*')
+      .eq('id', competitionId)
+      .single();
 
-    if (!competition) {
+    if (competitionError || !competition) {
       return NextResponse.json(
         { error: 'Змагання не знайдено' },
         { status: 404 }
@@ -74,19 +61,56 @@ export async function POST(
       );
     }
 
+    // Перевіряємо ліміт учасників
+    if (competition.max_participants) {
+      const { count: currentParticipants } = await supabase
+        .from('individual_registrations')
+        .select('*', { count: 'exact', head: true })
+        .eq('competition_id', competitionId)
+        .in('status', ['pending', 'confirmed']);
+
+      if (currentParticipants && currentParticipants >= competition.max_participants) {
+        return NextResponse.json(
+          { error: 'Досягнуто максимальну кількість учасників' },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Перевіряємо чи не зареєстрований вже цей учасник
+    const { data: existingRegistration } = await supabase
+      .from('individual_registrations')
+      .select('id')
+      .eq('competition_id', competitionId)
+      .eq('participant->full_name', registrationData.participant.full_name)
+      .eq('participant->date_of_birth', registrationData.participant.date_of_birth)
+      .neq('status', 'cancelled')
+      .single();
+
+    if (existingRegistration) {
+      return NextResponse.json(
+        { error: 'Цей учасник вже зареєстрований на змагання' },
+        { status: 400 }
+      );
+    }
+
     // Розраховуємо вартість реєстрації
     const registrationFee = competition.registration_fee + (competition.entry_fee || 0);
 
     // Генеруємо реєстраційний номер
+    const { count: registrationCount } = await supabase
+      .from('individual_registrations')
+      .select('*', { count: 'exact', head: true })
+      .eq('competition_id', competitionId);
+
     const registrationNumber = generateRegistrationNumber(
       competitionId,
       'individual',
-      Math.floor(Math.random() * 100) + 1
+      (registrationCount || 0) + 1
     );
 
-    // Створюємо демонстраційну реєстрацію
+    // Створюємо основну реєстрацію
     const individualRegistration = {
-      id: `indiv-${Date.now()}`,
       competition_id: competitionId,
       preliminary_registration_id: registrationData.preliminary_registration_id,
       participant: registrationData.participant,
@@ -102,21 +126,52 @@ export async function POST(
       registration_number: registrationNumber,
       status: 'pending',
       notes: registrationData.notes,
-      created_by: session.user.id,
+      created_by: session?.user?.id || 'unknown',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
 
-    console.log('Demo individual registration created:', individualRegistration);
+    const { data: registration, error } = await supabase
+      .from('individual_registrations')
+      .insert([individualRegistration])
+      .select()
+      .single();
 
-    // Симуляція відправки email
-    console.log(`📧 Demo email sent to: ${registrationData.participant.email || session.user?.email}`);
-    console.log(`Email content: Підтвердження реєстрації ${registrationData.participant.full_name} на ${competition.title}`);
+    if (error) {
+      console.error('Error creating individual registration:', error);
+      return NextResponse.json(
+        { error: 'Помилка при створенні іменної реєстрації' },
+        { status: 500 }
+      );
+    }
+
+    // Відправляємо email підтвердження
+    try {
+      await EmailService.sendRegistrationConfirmation(
+        registrationData.participant.email || session?.user?.email || '',
+        {
+          participantName: registrationData.participant.full_name,
+          competitionTitle: competition.title,
+          competitionDate: new Date(competition.date).toLocaleDateString('uk-UA'),
+          competitionTime: competition.time,
+          location: competition.location,
+          address: competition.address,
+          category: registrationData.program_details.category,
+          ageGroup: registrationData.program_details.age_group,
+          contactPerson: `${competition.organizer_name} (${competition.organizer_phone})`,
+          competitionUrl: `${process.env.APP_URL}/competitions/${competitionId}`,
+          dashboardUrl: `${process.env.APP_URL}/dashboard`
+        }
+      );
+    } catch (emailError) {
+      console.error('Failed to send registration confirmation email:', emailError);
+      // Не перериваємо процес через помилку email
+    }
 
     return NextResponse.json({
       success: true,
-      message: '✅ Реєстрацію успішно створено (демонстраційний режим)',
-      registration: individualRegistration,
+      message: 'Реєстрацію успішно створено',
+      registration,
       registrationNumber,
       registrationFee
     });
@@ -133,59 +188,40 @@ export async function POST(
 // GET /api/competitions/[id]/individual-registration
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const competitionId = params.id;
+    const { id: competitionId } = await params;
     const searchParams = request.nextUrl.searchParams;
     const userId = searchParams.get('user_id');
 
-    // Демонстраційні дані реєстрацій
-    const demoRegistrations = [
-      {
-        id: 'indiv-1',
-        competition_id: competitionId,
-        participant: {
-          full_name: 'Петренко Оксана Вікторівна',
-          age_group: 'SENIORS'
-        },
-        program_details: {
-          program_type: 'individual_woman',
-          category: 'master_sport'
-        },
-        registration_number: 'IN-COMP1-001',
-        status: 'confirmed',
-        payment_status: 'paid',
-        created_at: '2024-12-01T10:00:00Z'
-      },
-      {
-        id: 'indiv-2',
-        competition_id: competitionId,
-        participant: {
-          full_name: 'Коваленко Андрій Сергійович',
-          age_group: 'JUNIORS'
-        },
-        program_details: {
-          program_type: 'individual_men',
-          category: 'adult_1'
-        },
-        registration_number: 'IN-COMP1-002',
-        status: 'pending',
-        payment_status: 'pending',
-        created_at: '2024-12-02T14:30:00Z'
-      }
-    ];
-
-    let registrations = demoRegistrations;
+    let query = supabase
+      .from('individual_registrations')
+      .select(`
+        *,
+        competition:competitions(title, date, location, time),
+        preliminary_registration:preliminary_registrations(club_name)
+      `)
+      .eq('competition_id', competitionId)
+      .order('created_at', { ascending: false });
 
     if (userId) {
-      registrations = registrations.filter(reg => reg.id.includes(userId));
+      query = query.eq('created_by', userId);
+    }
+
+    const { data: registrations, error } = await query;
+
+    if (error) {
+      console.error('Error fetching individual registrations:', error);
+      return NextResponse.json(
+        { error: 'Помилка при отриманні реєстрацій' },
+        { status: 500 }
+      );
     }
 
     return NextResponse.json({
       success: true,
-      registrations,
-      message: '🎯 Демонстраційні дані індивідуальних реєстрацій'
+      registrations: registrations || []
     });
 
   } catch (error) {
